@@ -12,8 +12,16 @@ import html
 
 from modules import extensions, shared, paths
 
+from modules.shared import opts
+
 
 available_extensions = {"extensions": []}
+
+proxy_type = None
+proxy_url = None
+if opts.using_proxy:
+    proxy_type = opts.proxy_type.lower()
+    proxy_url = f'{opts.proxy_host}:{opts.proxy_port}'
 
 
 def check_access():
@@ -36,9 +44,9 @@ def apply_and_restart(disable_list, update_list):
             continue
 
         try:
-            ext.fetch_and_reset_hard()
+            ext.pull()
         except Exception:
-            print(f"Error getting updates for {ext.name}:", file=sys.stderr)
+            print(f"Error pulling updates for {ext.name}:", file=sys.stderr)
             print(traceback.format_exc(), file=sys.stderr)
 
     shared.opts.disabled_extensions = disabled
@@ -108,6 +116,7 @@ def normalize_git_url(url):
 
 
 def install_extension_from_url(dirname, url):
+    global proxy_type, proxy_url
     check_access()
 
     assert url, 'No URL specified'
@@ -129,13 +138,19 @@ def install_extension_from_url(dirname, url):
     try:
         shutil.rmtree(tmpdir, True)
 
-        repo = git.Repo.clone_from(url, tmpdir)
+        if proxy_type and proxy_url:
+            try:
+                repo = git.Repo.clone_from(url, tmpdir, config=f'http.proxy={proxy_url}')
+            except git.exc.GitError as ex1:
+                print(ex1)
+            except Exception as ex:
+                print(ex)
+        else:
+            repo = git.Repo.clone_from(url, tmpdir)
+
         repo.remote().fetch()
 
         os.rename(tmpdir, target_dir)
-
-        import launch
-        launch.run_extension_installer(target_dir)
 
         extensions.list_extensions()
         return [extension_table(), html.escape(f"Installed into {target_dir}. Use Installed tab to restart.")]
@@ -153,8 +168,15 @@ def install_extension_from_index(url, hide_tags):
 
 def refresh_available_extensions(url, hide_tags):
     global available_extensions
+    global proxy_type, proxy_url
 
     import urllib.request
+
+    if proxy_type and proxy_url:
+        proxy_handler = urllib.request.ProxyHandler({'http': f'{proxy_type}://{proxy_url}', 'https': f'{proxy_type}://{proxy_url}'})
+        opener = urllib.request.build_opener(proxy_handler)
+        urllib.request.install_opener(opener)
+
     with urllib.request.urlopen(url) as response:
         text = response.read()
 
